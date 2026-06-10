@@ -8,3 +8,5 @@
 
 # PyYAML is included only for metadata validation (not used in ranking)
 pyyaml>=6.0
+streamlit
+pandas
