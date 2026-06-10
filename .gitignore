@@ -1,0 +1,7 @@
+data/
+venv/
+__pycache__/
+*.pyc
+candidates.jsonl
+candidates.jsonl.gz
+submission.csv

@@ -1,0 +1,77 @@
+# Aethelgard — Deterministic Hiring Intelligence Engine
+# Submission Metadata for Redrob Hackathon
+
+# ============================================================================
+# Team identity
+# ============================================================================
+team_name: "Aethelgard"
+
+primary_contact:
+  name: "Team Aethelgard"
+  email: "aethelgard@example.com"
+  phone: "+91-XXXXXXXXXX"
+
+team_members:
+  - name: "Team Aethelgard"
+    email: "aethelgard@example.com"
+    role: "ML Engineer"
+
+# ============================================================================
+# Code and reproducibility
+# ============================================================================
+github_repo: "https://github.com/TEAM/aethelgard"
+
+sandbox_link: "https://huggingface.co/spaces/TEAM/aethelgard-ranker"
+
+reproduce_command: "python rank.py --candidates ./candidates.jsonl.gz --out ./submission.csv"
+
+# ============================================================================
+# Compute environment
+# ============================================================================
+compute:
+  platform: "Standard CPU Machine"
+  cpu_cores: 4
+  ram_gb: 16
+  python_version: "3.11"
+  os: "Windows / Linux"
+  uses_gpu_for_inference: false
+  has_network_during_ranking: false
+  pre_computation_required: false
+  pre_computation_time_minutes: 0
+
+# ============================================================================
+# AI tools declaration
+# ============================================================================
+ai_tools_used:
+  - "Claude"
+  - "Gemini"
+
+ai_usage_summary: |
+  Used Claude and Gemini for architectural discussion, code review, and
+  debugging. No candidate data was fed to any LLM during the ranking step.
+  The ranking engine is fully deterministic and runs offline with zero
+  external API calls.
+
+# ============================================================================
+# Approach summary
+# ============================================================================
+methodology_summary: |
+  Deterministic multi-signal weighted ranking pipeline. Seven scoring
+  components (title/career alignment, skill quality with trust multiplier,
+  experience fit curve, behavioral availability float, location preference,
+  education tier, career quality) combined via weighted sum. Honeypot
+  detection catches impossible profiles (>15 skills/<2y exp, near-zero
+  response rates, expert skills with 0 duration). Title alignment is the
+  highest-weighted signal to avoid the keyword-stuffer trap. Streaming
+  JSON parsing with min-heap selection keeps memory under 2GB. Runtime is
+  ~60 seconds for 100K candidates on a standard CPU.
+
+# ============================================================================
+# Declarations
+# ============================================================================
+declarations:
+  read_submission_spec: true
+  code_is_original_work: true
+  no_collusion: true
+  honeypot_check_done: true
+  reproduction_tested: true
