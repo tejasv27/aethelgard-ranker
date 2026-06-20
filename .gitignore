@@ -4,4 +4,5 @@ __pycache__/
 *.pyc
 candidates.jsonl
 candidates.jsonl.gz
-submission.csv
+submission.csv
+submission_details.json

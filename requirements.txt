@@ -1,12 +1,16 @@
-# Aethelgard — Deterministic Hiring Intelligence Engine
-# Minimal dependencies for CPU-only, network-free ranking pipeline
+# Aethelgard — Hybrid Deterministic + Semantic Intelligence Pipeline
+# Dependencies for CPU-only, network-free ranking pipeline
 # Python >= 3.9 required
 
-# No external ML libraries needed — pure Python + stdlib
-# The pipeline uses only: json, gzip, csv, argparse, math, re, datetime, heapq, time, logging
-# These are all part of Python's standard library.
+# Core ranking engine uses stdlib only: json, gzip, csv, argparse, math, re, datetime, heapq, time, logging
 
-# PyYAML is included only for metadata validation (not used in ranking)
+# Metadata validation
 pyyaml>=6.0
+
+# Streamlit sandbox UI
 streamlit
 pandas
+
+# Semantic re-ranking layer (optional — pipeline falls back gracefully if missing)
+sentence-transformers>=2.2.0
+torch>=2.0.0

@@ -161,7 +161,7 @@ assert hp is True, "Honeypot should be detected"
 assert s2 < 0.05, "Honeypot should score <0.05, got %.4f" % s2
 print("  PASS ✓")
 
-# Test bad fit (Marketing Manager with AI keywords)
+# Test bad fit → non-technical role mismatch (Marketing Manager with AI keywords)
 f3 = extract_features(bad_fit, today)
 s3, c3 = compute_composite_score(f3)
 r3 = generate_reasoning(f3, s3, 80, c3)

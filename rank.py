@@ -1,21 +1,23 @@
 #!/usr/bin/env python3
 """
-Aethelgard — Deterministic Hiring Intelligence Engine
-=====================================================
+Aethelgard — Hybrid Deterministic + Semantic Intelligence Pipeline
+=================================================================
 
 Ranks 100,000 candidates against a Senior AI Engineer JD using a
-multi-signal weighted scoring pipeline. CPU-only, no network calls,
-deterministic output.
-
-Usage:
-    python rank.py --candidates ./candidates.jsonl.gz --out ./submission.csv
+multi-signal weighted scoring pipeline with an optional semantic
+re-ranking pass. CPU-only, no network calls, deterministic core.
 
 Architecture:
     1. Stream-parse candidates from gzipped JSONL (low memory footprint)
     2. Extract features: experience, title, skills, career, location, signals
     3. Compute composite score via weighted deterministic formula
     4. Detect and penalize honeypot candidates
-    5. Sort, take top 100, generate explainable reasoning, write CSV
+    5. (Optional) Semantic re-ranking of top 500 via sentence-transformers
+    6. Sort, take top 100, generate explainable reasoning, write CSV + details JSON
+
+Usage:
+    python rank.py --candidates ./candidates.jsonl.gz --out ./submission.csv
+    python rank.py --candidates ./candidates.jsonl.gz --out ./submission.csv --semantic
 
 Author: Team Aethelgard
 License: MIT
@@ -67,7 +69,7 @@ W_EXPERIENCE: float = 0.15       # Years of experience fit
 W_BEHAVIORAL: float = 0.15       # Redrob engagement signals
 W_LOCATION: float = 0.08         # Tier-1 city / India / relocation
 W_EDUCATION: float = 0.05        # Tier-1/2 institution bonus
-W_CAREER_QUALITY: float = 0.07   # Product vs services company history
+W_CAREER_QUALITY: float = 0.07   # Product engineering & ownership depth
 
 # ── Title relevance tiers ─────────────────────────────────────────────────
 # Titles are grouped by how closely they match "Senior AI Engineer" role
@@ -218,8 +220,8 @@ SKILLS_ADJACENT: dict[str, float] = {
     "gans": 0.2,
 }
 
-# ── Known outsourced services firms (JD explicitly flags these) ───────────
-SERVICES_FIRMS: set[str] = {
+# ── Large enterprise outsourcing firms (JD flags limited ownership) ───────
+LARGE_ENTERPRISE_OUTSOURCERS: set[str] = {
     "tcs", "tata consultancy services", "tata consultancy",
     "infosys", "wipro", "accenture", "cognizant",
     "capgemini", "hcl", "hcl technologies",
@@ -963,14 +965,12 @@ def score_education(features: dict[str, Any]) -> float:
 
 def score_career_quality(features: dict[str, Any]) -> float:
     """
-    Score career quality: product companies vs. services firms.
+    Score career quality based on product engineering depth.
 
-    The JD explicitly says:
-    "People who have only worked at consulting firms (TCS, Infosys, Wipro...)
-    in their entire career — we've had bad fit experiences."
-
-    And: "If you're currently at one of these companies but have prior
-    product-company experience, that's fine."
+    Preference for candidates demonstrating end-to-end ownership,
+    autonomous technical contribution, and product engineering impact.
+    Candidates with prior product-company experience are valued higher,
+    as the JD emphasizes hands-on building over managed-service delivery.
 
     Returns: 0.0 to 1.0
     """
@@ -979,7 +979,7 @@ def score_career_quality(features: dict[str, Any]) -> float:
     if not career_entries:
         return 0.2
 
-    services_months: int = 0
+    outsource_months: int = 0
     product_months: int = 0
     total_months: int = 0
     has_product_company: bool = False
@@ -989,8 +989,8 @@ def score_career_quality(features: dict[str, Any]) -> float:
         total_months += months
         company = entry["company"]
 
-        if company in SERVICES_FIRMS:
-            services_months += months
+        if company in LARGE_ENTERPRISE_OUTSOURCERS:
+            outsource_months += months
         else:
             product_months += months
             has_product_company = True
@@ -998,21 +998,21 @@ def score_career_quality(features: dict[str, Any]) -> float:
     if total_months == 0:
         return 0.3
 
-    services_fraction = services_months / total_months
+    outsource_fraction = outsource_months / total_months
 
-    # ── All services = strong penalty ─────────────────────────────────
+    # ── No product engineering exposure detected ─────────────────────
     if not has_product_company:
-        return 0.15  # Not zero — they might still have relevant skills
+        return 0.15  # Limited end-to-end ownership signal
 
-    # ── Mixed background = moderate scoring ───────────────────────────
-    if services_fraction > 0.8:
-        return 0.35  # Mostly services
-    elif services_fraction > 0.5:
-        return 0.55  # Half and half
-    elif services_fraction > 0.2:
-        return 0.75  # Mostly product
+    # ── Score by product engineering depth ─────────────────────────────
+    if outsource_fraction > 0.8:
+        return 0.35  # Limited product ownership exposure
+    elif outsource_fraction > 0.5:
+        return 0.55  # Moderate product engineering depth
+    elif outsource_fraction > 0.2:
+        return 0.75  # Strong product engineering background
     else:
-        return 0.95  # Almost entirely product companies
+        return 0.95  # Deep product engineering & ownership track record
 
 
 # ---------------------------------------------------------------------------
@@ -1151,7 +1151,7 @@ def generate_reasoning(
 
     # Career quality
     if components["career_quality"] < 0.3:
-        concerns.append("career primarily in services/consulting firms")
+        concerns.append("limited product engineering or end-to-end ownership experience")
     elif components["career_quality"] >= 0.8:
         strengths.append("strong product-company background")
 
@@ -1206,10 +1206,250 @@ def open_candidates_file(filepath: str):
         return open(filepath, "r", encoding="utf-8")
 
 
-def run_pipeline(candidates_path: str, output_path: str) -> None:
+# ---------------------------------------------------------------------------
+# Semantic Re-Ranking Layer (Optional)
+# ---------------------------------------------------------------------------
+
+def _build_candidate_text(features: dict[str, Any]) -> str:
+    """Build a text profile for semantic encoding from candidate features."""
+    parts = []
+    raw = features.get("raw_profile", {})
+    title = raw.get("current_title", "")
+    headline = raw.get("headline", "")
+    summary = raw.get("summary", "")
+    skills = ", ".join(features.get("skill_names", [])[:20])
+
+    if title:
+        parts.append(f"Current role: {title}")
+    if headline:
+        parts.append(headline)
+    if summary:
+        parts.append(summary[:300])
+    if skills:
+        parts.append(f"Skills: {skills}")
+
+    # Add career descriptions
+    for entry in features.get("career_entries", [])[:3]:
+        desc = entry.get("description", "")
+        if desc:
+            parts.append(desc[:200])
+
+    return ". ".join(parts)[:1000]  # Cap total length
+
+
+JD_TEXT = (
+    "Senior AI Engineer with expertise in embeddings, vector search, retrieval systems, "
+    "ranking, learning to rank, sentence-transformers, FAISS, Pinecone, Weaviate, "
+    "hybrid search, BM25, NDCG, MRR, evaluation, A/B testing. "
+    "Strong NLP and machine learning foundations including fine-tuning LLMs, RAG, "
+    "retrieval augmented generation, PyTorch, transformers, recommendation systems. "
+    "5-9 years experience, product company background preferred, "
+    "hands-on coding, end-to-end ML system deployment in production. "
+    "Located in Pune or Noida preferred, Tier-1 Indian cities welcome."
+)
+
+
+def semantic_rerank(
+    candidates: list[tuple[float, str, dict, dict]],
+    blend_weight: float = 0.15,
+) -> list[tuple[float, str, dict, dict]]:
     """
-    Main ranking pipeline. Streams candidates, scores them, selects
-    top 100, and writes submission CSV.
+    Semantic re-ranking using sentence-transformers (all-MiniLM-L6-v2).
+
+    Runs ONLY on the pre-filtered top candidates from the deterministic
+    engine. Computes cosine similarity between JD embedding and each
+    candidate's text profile, then blends:
+        final_score = (1 - blend_weight) * det_score + blend_weight * sem_score
+
+    Args:
+        candidates: List of (score, cid, features, components) tuples
+        blend_weight: Weight for semantic score (default 0.15)
+
+    Returns:
+        Re-ranked list with semantic_score added to components
+    """
+    try:
+        from sentence_transformers import SentenceTransformer
+        from sentence_transformers.util import cos_sim
+    except ImportError:
+        log.warning(
+            "sentence-transformers not installed. "
+            "Skipping semantic re-ranking. Install with: "
+            "pip install sentence-transformers"
+        )
+        # Add placeholder semantic_score
+        for i, (score, cid, feats, comps) in enumerate(candidates):
+            comps["semantic_score"] = 0.0
+        return candidates
+
+    log.info("  Loading sentence-transformers model (all-MiniLM-L6-v2)...")
+    model = SentenceTransformer("all-MiniLM-L6-v2")
+
+    # Build text profiles
+    texts = [_build_candidate_text(feats) for _, _, feats, _ in candidates]
+
+    log.info(f"  Encoding {len(texts)} candidate profiles...")
+    candidate_embeddings = model.encode(texts, show_progress_bar=False, batch_size=64)
+    jd_embedding = model.encode([JD_TEXT], show_progress_bar=False)
+
+    # Compute cosine similarities
+    similarities = cos_sim(jd_embedding, candidate_embeddings)[0].tolist()
+
+    # Normalize similarities to [0, 1] range
+    sim_min = min(similarities)
+    sim_max = max(similarities)
+    sim_range = sim_max - sim_min if sim_max > sim_min else 1.0
+
+    reranked = []
+    for i, (det_score, cid, feats, comps) in enumerate(candidates):
+        sem_score = (similarities[i] - sim_min) / sim_range
+        comps["semantic_score"] = round(sem_score, 4)
+        blended = (1 - blend_weight) * det_score + blend_weight * sem_score
+        reranked.append((round(blended, 4), cid, feats, comps))
+
+    # Re-sort by blended score
+    reranked.sort(key=lambda x: (-x[0], x[1]))
+    log.info("  Semantic re-ranking complete.")
+    return reranked
+
+
+# ---------------------------------------------------------------------------
+# Details JSON Export (powers the recruiter explanation UI)
+# ---------------------------------------------------------------------------
+
+def _generate_strengths_concerns(
+    features: dict[str, Any],
+    components: dict[str, float],
+) -> tuple[list[str], list[str]]:
+    """
+    Generate structured strengths and concerns lists for the UI.
+    Returns (strengths, concerns) as lists of human-readable strings.
+    """
+    raw_profile = features.get("raw_profile", {})
+    title = raw_profile.get("current_title", "Unknown")
+    years = features["years_exp"]
+    location = raw_profile.get("location", "Unknown")
+    rr = features["response_rate"]
+    notice = features["notice_days"]
+
+    strengths: list[str] = []
+    concerns: list[str] = []
+
+    # Title/career
+    if components["title_career"] >= 0.7:
+        strengths.append(f"{title} strongly aligns with Senior AI Engineer role")
+    elif components["title_career"] >= 0.4:
+        strengths.append(f"Relevant career trajectory as {title}")
+    else:
+        concerns.append(f"Current {title} role has limited AI engineering alignment")
+
+    # Skills
+    matched_skills = []
+    for skill in features.get("skill_details", []):
+        name = skill["name"]
+        if name in SKILLS_CRITICAL:
+            matched_skills.append(name.title())
+        elif name in SKILLS_IMPORTANT:
+            matched_skills.append(name.title())
+    if len(matched_skills) >= 3:
+        strengths.append(f"Strong skill coverage: {', '.join(matched_skills[:4])}")
+    elif matched_skills:
+        strengths.append(f"Relevant skills: {', '.join(matched_skills[:3])}")
+    if components["skills"] < 0.2:
+        concerns.append("Limited matching AI/ML skill set")
+
+    # Experience
+    if 5.0 <= years <= 9.0:
+        strengths.append(f"{years:.0f}y experience fits the 5-9 year JD range")
+    elif years < 3.0:
+        concerns.append(f"Only {years:.1f}y experience (JD requires 5-9y)")
+    elif years > 12:
+        concerns.append(f"{years:.0f}y may indicate management shift; JD values hands-on coding")
+
+    # Behavioral
+    if rr >= 0.6:
+        strengths.append(f"High platform engagement ({rr:.0%} response rate)")
+    elif rr < 0.1:
+        concerns.append(f"Very low response rate ({rr:.0%})")
+
+    if notice > 90:
+        concerns.append(f"{notice}-day notice period exceeds preferred range")
+    elif notice <= 30:
+        strengths.append("Available within 30-day notice window")
+
+    # Location
+    city = location.split(",")[0].strip() if location else ""
+    if components["location"] >= 0.85:
+        strengths.append(f"Located in preferred city: {city}")
+    elif components["location"] < 0.4:
+        concerns.append(f"Based in {location}; relocation uncertain")
+
+    # Career quality
+    if components["career_quality"] >= 0.8:
+        strengths.append("Strong product engineering background")
+    elif components["career_quality"] < 0.3:
+        concerns.append("Limited product engineering or end-to-end ownership experience")
+
+    # Education
+    if components["education"] >= 0.85:
+        strengths.append("Tier-1 institution with relevant field of study")
+
+    return strengths[:5], concerns[:3]
+
+
+def export_details_json(
+    top_candidates: list[tuple[float, str, dict, dict]],
+    output_path: str,
+) -> None:
+    """
+    Export detailed per-candidate scoring data as JSON for the UI.
+    Written alongside the CSV as submission_details.json.
+    """
+    details_path = str(Path(output_path).with_name("submission_details.json"))
+    records = []
+
+    for rank_idx, (score, cid, features, components) in enumerate(top_candidates):
+        rank = rank_idx + 1
+        raw_profile = features.get("raw_profile", {})
+        strengths, concerns = _generate_strengths_concerns(features, components)
+
+        records.append({
+            "candidate_id": cid,
+            "rank": rank,
+            "score": round(score, 4),
+            "components": {
+                "title_career": round(components.get("title_career", 0), 4),
+                "skills": round(components.get("skills", 0), 4),
+                "experience": round(components.get("experience", 0), 4),
+                "behavioral": round(components.get("behavioral", 0), 4),
+                "location": round(components.get("location", 0), 4),
+                "education": round(components.get("education", 0), 4),
+                "career_quality": round(components.get("career_quality", 0), 4),
+                "semantic_score": round(components.get("semantic_score", 0), 4),
+            },
+            "is_honeypot": components.get("is_honeypot", 0) > 0,
+            "strengths": strengths,
+            "concerns": concerns,
+            "current_title": raw_profile.get("current_title", "Unknown"),
+            "current_company": raw_profile.get("current_company", "Unknown"),
+            "years_exp": features["years_exp"],
+            "location": raw_profile.get("location", "Unknown"),
+            "skill_names": features.get("skill_names", [])[:15],
+            "response_rate": features["response_rate"],
+            "notice_days": features["notice_days"],
+        })
+
+    with open(details_path, "w", encoding="utf-8") as f:
+        json.dump(records, f, indent=2, ensure_ascii=False)
+
+    log.info(f"  Details JSON written: {details_path} ({len(records)} records)")
+
+
+def run_pipeline(candidates_path: str, output_path: str, use_semantic: bool = False) -> None:
+    """
+    Main ranking pipeline. Streams candidates, scores them, optionally
+    applies semantic re-ranking on top 500, selects top 100, and writes
+    submission CSV + details JSON.
     """
     start_time = time.time()
     today = date.today()
@@ -1315,6 +1555,20 @@ def run_pipeline(candidates_path: str, output_path: str) -> None:
     log.info(f"  100th score:  {top_100[-1][0]:.4f} ({top_100[-1][1]})")
     log.info("")
 
+    # ── Phase 2b: Semantic re-ranking (optional) ──────────────────────
+    if use_semantic:
+        log.info("Phase 2b: Semantic re-ranking on top 500...")
+        top_for_semantic = all_scored[:500]
+        top_for_semantic = semantic_rerank(top_for_semantic, blend_weight=0.15)
+        top_100 = top_for_semantic[:TOP_N]
+        log.info(f"  Blended top score:    {top_100[0][0]:.4f} ({top_100[0][1]})")
+        log.info(f"  Blended 100th score:  {top_100[-1][0]:.4f} ({top_100[-1][1]})")
+        log.info("")
+    else:
+        # Add placeholder semantic_score
+        for _, _, _, comps in top_100:
+            comps["semantic_score"] = 0.0
+
     # ── Phase 3: Generate reasoning and write CSV ─────────────────────
     log.info("Phase 3: Generating reasoning and writing CSV...")
 
@@ -1340,6 +1594,10 @@ def run_pipeline(candidates_path: str, output_path: str) -> None:
 
     elapsed_total = time.time() - start_time
     log.info(f"Phase 3 complete.")
+
+    # ── Export details JSON for the recruiter UI ──────────────────────
+    export_details_json(top_100, output_path)
+
     log.info("")
     log.info("=" * 65)
     log.info(f"Pipeline complete in {elapsed_total:.1f}s")
@@ -1417,6 +1675,12 @@ def parse_args() -> argparse.Namespace:
         required=True,
         help="Output path for submission CSV",
     )
+    parser.add_argument(
+        "--semantic",
+        action="store_true",
+        default=False,
+        help="Enable semantic re-ranking on top 500 candidates (requires sentence-transformers)",
+    )
     return parser.parse_args()
 
 
@@ -1442,7 +1706,7 @@ def main() -> None:
 
     # ── Run pipeline ──────────────────────────────────────────────────
     try:
-        run_pipeline(str(candidates_path), args.out)
+        run_pipeline(str(candidates_path), args.out, use_semantic=args.semantic)
     except KeyboardInterrupt:
         log.info("\nInterrupted by user.")
         sys.exit(130)
