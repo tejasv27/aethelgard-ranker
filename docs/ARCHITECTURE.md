@@ -1,5 +1,6 @@
 # Architecture Deep Dive
 
+![Aethelgard Architecture Flowchart](assets/architecture_flowchart.png)
 ## AI & System Architecture
 Aethelgard operates on an optimized **4-Stage Hybrid Pipeline**:
 
