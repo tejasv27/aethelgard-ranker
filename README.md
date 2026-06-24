@@ -85,10 +85,8 @@ Please refer to [docs/API_REFERENCE.md](docs/API_REFERENCE.md) and [docs/ARCHITE
 - Distributed processing for datasets > 10M records.
 
 ## 👥 Team Members
-- **Aman Kumar** - Core Engineering
-- **Tejasv Sharma** - Core Engineering 
-- **Awi Kumari** - Core Engineering
-- **Lead Architect** - Antigravity AI Agent
+- **Sneha Paul**
+- **Tejasv Sharma**
 
 ## 📜 License & Acknowledgements
 MIT License. Built for the Hack2Skill Data & AI Challenge.
