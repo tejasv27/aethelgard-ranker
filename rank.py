@@ -1019,14 +1019,42 @@ def score_career_quality(features: dict[str, Any]) -> float:
 # Composite Scoring
 # ---------------------------------------------------------------------------
 
-def compute_composite_score(features: dict[str, Any]) -> tuple[float, dict[str, float]]:
+def compute_composite_score(
+    features: dict[str, Any],
+    weight_schema: dict[str, float] | None = None,
+) -> tuple[float, dict[str, float]]:
     """
     Compute the final deterministic composite score.
+
+    Args:
+        features: Extracted candidate features.
+        weight_schema: Optional dynamic weights (must sum to ~1.0).
+            Keys: title_career, skills, experience, behavioral,
+                  location, education, career_quality.
+            If None, uses the module-level default constants.
 
     Returns:
         (composite_score, component_scores_dict) — the composite and all
         individual components for reasoning generation.
     """
+    # ── Resolve weights ───────────────────────────────────────────────
+    if weight_schema is not None:
+        w_title = weight_schema.get("title_career", W_TITLE_CAREER)
+        w_skills = weight_schema.get("skills", W_SKILLS)
+        w_exp = weight_schema.get("experience", W_EXPERIENCE)
+        w_behav = weight_schema.get("behavioral", W_BEHAVIORAL)
+        w_loc = weight_schema.get("location", W_LOCATION)
+        w_edu = weight_schema.get("education", W_EDUCATION)
+        w_career = weight_schema.get("career_quality", W_CAREER_QUALITY)
+    else:
+        w_title = W_TITLE_CAREER
+        w_skills = W_SKILLS
+        w_exp = W_EXPERIENCE
+        w_behav = W_BEHAVIORAL
+        w_loc = W_LOCATION
+        w_edu = W_EDUCATION
+        w_career = W_CAREER_QUALITY
+
     # ── Compute all components ────────────────────────────────────────
     s_title = score_title_career(features)
     s_skills = score_skills(features)
@@ -1038,13 +1066,13 @@ def compute_composite_score(features: dict[str, Any]) -> tuple[float, dict[str, 
 
     # ── Weighted sum ──────────────────────────────────────────────────
     composite = (
-        W_TITLE_CAREER * s_title
-        + W_SKILLS * s_skills
-        + W_EXPERIENCE * s_exp
-        + W_BEHAVIORAL * s_behavioral
-        + W_LOCATION * s_location
-        + W_EDUCATION * s_education
-        + W_CAREER_QUALITY * s_career_q
+        w_title * s_title
+        + w_skills * s_skills
+        + w_exp * s_exp
+        + w_behav * s_behavioral
+        + w_loc * s_location
+        + w_edu * s_education
+        + w_career * s_career_q
     )
 
     # ── Honeypot penalty ──────────────────────────────────────────────
@@ -1314,6 +1342,132 @@ def semantic_rerank(
 
 
 # ---------------------------------------------------------------------------
+# Cross-Encoder Deep Alignment Layer (Optional)
+# ---------------------------------------------------------------------------
+
+def cross_encoder_rerank(
+    candidates: list[tuple[float, str, dict, dict]],
+    blend_weight: float = 0.20,
+) -> list[tuple[float, str, dict, dict]]:
+    """
+    Deep semantic re-ranking using a Cross-Encoder with sliding window
+    max-pooling to handle long candidate profiles.
+
+    The cross-encoder/ms-marco-MiniLM-L-6-v2 model has a 512-token context
+    window. Dense professional histories often exceed this, causing critical
+    data loss via truncation. This implementation:
+
+    1. Tokenizes the candidate text
+    2. If tokens <= 400: scores directly (fast path)
+    3. If tokens > 400: segments into overlapping windows of 350 tokens
+       with a step of 100, scores each window independently, then
+       applies max-pooling: Score_final = max(s_1, s_2, ..., s_n)
+
+    This preserves specialized experience hidden deep in long resumes.
+
+    Uses: cross-encoder/ms-marco-MiniLM-L-6-v2
+    Applied: ONLY to top 200 candidates from deterministic filtering.
+
+    Args:
+        candidates: List of (score, cid, features, components) tuples
+        blend_weight: Weight for cross-encoder score (default 0.20)
+
+    Returns:
+        Re-ranked list with cross_encoder_score added to components
+    """
+    try:
+        from sentence_transformers import CrossEncoder
+    except ImportError:
+        log.warning(
+            "sentence-transformers not installed or CrossEncoder unavailable. "
+            "Skipping cross-encoder re-ranking."
+        )
+        for _, _, _, comps in candidates:
+            comps["cross_encoder_score"] = 0.0
+        return candidates
+
+    log.info("  Loading Cross-Encoder model (ms-marco-MiniLM-L-6-v2)...")
+    try:
+        model = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2", max_length=512)
+    except Exception as e:
+        log.warning(f"  Failed to load Cross-Encoder: {e}. Skipping.")
+        for _, _, _, comps in candidates:
+            comps["cross_encoder_score"] = 0.0
+        return candidates
+
+    # ── Sliding window parameters ─────────────────────────────────────
+    WINDOW_SIZE = 350       # tokens per window
+    STEP_SIZE = 100         # overlap step
+    SHORT_THRESHOLD = 400   # below this, no windowing needed
+
+    def _rough_tokenize(text: str) -> list[str]:
+        """Fast whitespace tokenizer (close enough for length estimation)."""
+        return text.split()
+
+    def _score_candidate(jd: str, candidate_text: str) -> float:
+        """
+        Score a single candidate against the JD using sliding window
+        max-pooling if the text exceeds the context window.
+        """
+        tokens = _rough_tokenize(candidate_text)
+
+        if len(tokens) <= SHORT_THRESHOLD:
+            # Fast path: fits in context window, score directly
+            raw = model.predict([(jd, candidate_text)], show_progress_bar=False)
+            return float(raw[0])
+
+        # Sliding window: segment long text into overlapping chunks
+        windows = []
+        start = 0
+        while start < len(tokens):
+            end = min(start + WINDOW_SIZE, len(tokens))
+            window_text = " ".join(tokens[start:end])
+            windows.append(window_text)
+            if end >= len(tokens):
+                break
+            start += STEP_SIZE
+
+        # Score each window independently
+        pairs = [(jd, w) for w in windows]
+        window_scores = model.predict(pairs, show_progress_bar=False)
+
+        # Max-pooling: take the highest window score
+        return float(max(window_scores))
+
+    # ── Score all candidates ──────────────────────────────────────────
+    log.info(f"  Scoring {len(candidates)} candidates with sliding-window Cross-Encoder...")
+
+    raw_scores = []
+    for idx, (_, _, feats, _) in enumerate(candidates):
+        candidate_text = _build_candidate_text(feats)
+        score = _score_candidate(JD_TEXT, candidate_text)
+        raw_scores.append(score)
+
+        if (idx + 1) % 50 == 0:
+            log.info(f"    Cross-Encoder progress: {idx + 1}/{len(candidates)}")
+
+    # Apply sigmoid normalization to convert logits to [0, 1]
+    import math as _math
+    sigmoid_scores = [1.0 / (1.0 + _math.exp(-s)) for s in raw_scores]
+
+    # Normalize to [0, 1] range within the cohort
+    s_min = min(sigmoid_scores)
+    s_max = max(sigmoid_scores)
+    s_range = s_max - s_min if s_max > s_min else 1.0
+
+    reranked = []
+    for i, (det_score, cid, feats, comps) in enumerate(candidates):
+        ce_score = (sigmoid_scores[i] - s_min) / s_range
+        comps["cross_encoder_score"] = round(ce_score, 4)
+        blended = (1 - blend_weight) * det_score + blend_weight * ce_score
+        reranked.append((round(blended, 4), cid, feats, comps))
+
+    reranked.sort(key=lambda x: (-x[0], x[1]))
+    log.info("  Cross-Encoder re-ranking complete (sliding window + max-pooling).")
+    return reranked
+
+
+# ---------------------------------------------------------------------------
 # Details JSON Export (powers the recruiter explanation UI)
 # ---------------------------------------------------------------------------
 
@@ -1445,21 +1599,38 @@ def export_details_json(
     log.info(f"  Details JSON written: {details_path} ({len(records)} records)")
 
 
-def run_pipeline(candidates_path: str, output_path: str, use_semantic: bool = False) -> None:
+def run_pipeline(
+    candidates_path: str,
+    output_path: str,
+    use_semantic: bool = False,
+    use_cross_encoder: bool = False,
+    weight_schema: dict[str, float] | None = None,
+) -> None:
     """
     Main ranking pipeline. Streams candidates, scores them, optionally
-    applies semantic re-ranking on top 500, selects top 100, and writes
+    applies semantic/cross-encoder re-ranking, selects top 100, and writes
     submission CSV + details JSON.
+
+    Args:
+        candidates_path: Path to .jsonl or .jsonl.gz candidates file.
+        output_path: Path for the output submission CSV.
+        use_semantic: Enable bi-encoder semantic re-ranking on top 500.
+        use_cross_encoder: Enable cross-encoder deep alignment on top 200.
+        weight_schema: Optional dynamic weight distribution from LLM.
     """
     start_time = time.time()
     today = date.today()
 
     log.info("=" * 65)
-    log.info("Aethelgard — Deterministic Hiring Intelligence Engine")
+    log.info("Aethelgard — Hybrid Intelligence Engine V4 PRO")
     log.info("=" * 65)
     log.info(f"Candidates file: {candidates_path}")
     log.info(f"Output file:     {output_path}")
     log.info(f"Reference date:  {today}")
+    if weight_schema:
+        log.info(f"Dynamic weights: {weight_schema}")
+    else:
+        log.info("Weights: default (hardcoded)")
     log.info("")
 
     # ── Phase 1: Stream-process all candidates ────────────────────────
@@ -1496,7 +1667,7 @@ def run_pipeline(candidates_path: str, output_path: str, use_semantic: bool = Fa
             features = extract_features(candidate, today)
 
             # ── Compute composite score ───────────────────────────────
-            score, components = compute_composite_score(features)
+            score, components = compute_composite_score(features, weight_schema=weight_schema)
 
             # Track honeypots
             if components.get("is_honeypot", 0.0) > 0:
@@ -1566,8 +1737,21 @@ def run_pipeline(candidates_path: str, output_path: str, use_semantic: bool = Fa
         log.info("")
     else:
         # Add placeholder semantic_score
-        for _, _, _, comps in top_100:
+        for _, _, _, comps in all_scored:
             comps["semantic_score"] = 0.0
+
+    # ── Phase 2c: Cross-Encoder deep alignment (optional) ─────────────
+    if use_cross_encoder:
+        log.info("Phase 2c: Cross-Encoder deep alignment on top 200...")
+        top_for_ce = all_scored[:200]
+        top_for_ce = cross_encoder_rerank(top_for_ce, blend_weight=0.20)
+        top_100 = top_for_ce[:TOP_N]
+        log.info(f"  CE-blended top score:    {top_100[0][0]:.4f} ({top_100[0][1]})")
+        log.info(f"  CE-blended 100th score:  {top_100[-1][0]:.4f} ({top_100[-1][1]})")
+        log.info("")
+    else:
+        for _, _, _, comps in all_scored:
+            comps.setdefault("cross_encoder_score", 0.0)
 
     # ── Phase 3: Generate reasoning and write CSV ─────────────────────
     log.info("Phase 3: Generating reasoning and writing CSV...")
@@ -1681,6 +1865,20 @@ def parse_args() -> argparse.Namespace:
         default=False,
         help="Enable semantic re-ranking on top 500 candidates (requires sentence-transformers)",
     )
+    parser.add_argument(
+        "--cross-encoder",
+        action="store_true",
+        default=False,
+        dest="cross_encoder",
+        help="Enable cross-encoder deep alignment on top 200 candidates",
+    )
+    parser.add_argument(
+        "--weights-json",
+        type=str,
+        default=None,
+        dest="weights_json",
+        help="Path to JSON file with dynamic weight schema (from LLM)",
+    )
     return parser.parse_args()
 
 
@@ -1704,9 +1902,26 @@ def main() -> None:
             f"Expected .jsonl, .jsonl.gz, or .json"
         )
 
+    # ── Load dynamic weights if provided ───────────────────────────────
+    weight_schema = None
+    if args.weights_json:
+        weights_path = Path(args.weights_json)
+        if weights_path.exists():
+            with open(weights_path, "r", encoding="utf-8") as wf:
+                weight_schema = json.load(wf)
+            log.info(f"Loaded dynamic weights from {weights_path}")
+        else:
+            log.warning(f"Weights file not found: {weights_path}. Using defaults.")
+
     # ── Run pipeline ──────────────────────────────────────────────────
     try:
-        run_pipeline(str(candidates_path), args.out, use_semantic=args.semantic)
+        run_pipeline(
+            str(candidates_path),
+            args.out,
+            use_semantic=args.semantic,
+            use_cross_encoder=args.cross_encoder,
+            weight_schema=weight_schema,
+        )
     except KeyboardInterrupt:
         log.info("\nInterrupted by user.")
         sys.exit(130)

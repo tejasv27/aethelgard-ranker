@@ -4,6 +4,8 @@ import subprocess
 import os
 import time
 import json
+import re
+import math
 
 # ---------------------------------------------------------------------------
 # Page Configuration
@@ -16,22 +18,41 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------------------------------
-# Stable Dark SaaS Theme — No expander header CSS overrides
+# Database Initialization (Upgrade 2: Persistent RLRF)
+# ---------------------------------------------------------------------------
+from database import AethelgardDB
+
+@st.cache_resource
+def get_database():
+    """Thread-safe singleton database connection."""
+    return AethelgardDB()
+
+db = get_database()
+
+# ---------------------------------------------------------------------------
+# Session State Initialization
+# ---------------------------------------------------------------------------
+if "dynamic_weights" not in st.session_state:
+    st.session_state["dynamic_weights"] = None
+if "weight_status" not in st.session_state:
+    st.session_state["weight_status"] = None
+if "manual_override" not in st.session_state:
+    st.session_state["manual_override"] = False
+
+# ---------------------------------------------------------------------------
+# Stable Dark SaaS Theme
 # ---------------------------------------------------------------------------
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
 
-/* Global typography */
 html, body, .main, .stApp {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
 }
 
-/* Hide Streamlit branding */
 #MainMenu { visibility: hidden; }
 footer    { visibility: hidden; }
 
-/* Dark background */
 .main, [data-testid="stAppViewContainer"] {
     background-color: #0f1117;
     color: #e8eaed;
@@ -41,7 +62,6 @@ footer    { visibility: hidden; }
     border-right: 1px solid #1e1e2e !important;
 }
 
-/* Expander card body — do NOT touch the header/summary */
 [data-testid="stExpander"] {
     background: #161b22;
     border: 1px solid #21262d;
@@ -49,7 +69,6 @@ footer    { visibility: hidden; }
     margin-bottom: 10px;
 }
 
-/* Buttons */
 .stButton>button {
     background: linear-gradient(135deg, #4f46e5, #6366f1);
     color: white; border-radius: 8px; padding: 0.6rem 2rem;
@@ -61,14 +80,12 @@ footer    { visibility: hidden; }
     box-shadow: 0 4px 16px rgba(99, 102, 241, 0.3);
 }
 
-/* Download buttons */
 .stDownloadButton>button {
     background: rgba(16, 185, 129, 0.1);
     border: 1px solid rgba(16, 185, 129, 0.3);
     color: #34d399; border-radius: 8px; font-weight: 500;
 }
 
-/* st.metric */
 [data-testid="stMetric"] {
     background: #161b22;
     border: 1px solid #21262d;
@@ -88,7 +105,6 @@ footer    { visibility: hidden; }
     font-weight: 500 !important;
 }
 
-/* Progress bars */
 [data-testid="stProgress"] > div > div {
     background: #21262d !important;
     border-radius: 4px !important;
@@ -100,7 +116,6 @@ footer    { visibility: hidden; }
     height: 6px !important;
 }
 
-/* Strength badges */
 .tag-strength {
     background: rgba(16, 185, 129, 0.12);
     color: #34d399;
@@ -109,8 +124,6 @@ footer    { visibility: hidden; }
     font-size: 0.82rem; display: inline-block;
     margin: 3px 4px 3px 0; line-height: 1.4;
 }
-
-/* Concern badges */
 .tag-concern {
     background: rgba(251, 191, 36, 0.1);
     color: #fbbf24;
@@ -120,7 +133,6 @@ footer    { visibility: hidden; }
     margin: 3px 4px 3px 0; line-height: 1.4;
 }
 
-/* Info chip */
 .info-chip {
     display: inline-block;
     background: #21262d;
@@ -129,7 +141,6 @@ footer    { visibility: hidden; }
     margin-right: 6px; margin-bottom: 6px;
 }
 
-/* Score row */
 .score-row {
     display: flex; justify-content: space-between;
     align-items: center; margin-top: 10px; margin-bottom: 3px;
@@ -137,7 +148,6 @@ footer    { visibility: hidden; }
 .score-lbl { font-size: 0.82rem; color: #8b949e; }
 .score-val { font-size: 0.82rem; font-weight: 600; color: #e8eaed; }
 
-/* Hero cards */
 .hero-card {
     background: #161b22;
     border: 1px solid #21262d;
@@ -153,7 +163,6 @@ footer    { visibility: hidden; }
     margin-top: 0.4rem;
 }
 
-/* Pipeline badge */
 .pipe-badge {
     background: rgba(99, 102, 241, 0.1);
     border: 1px solid rgba(99, 102, 241, 0.25);
@@ -164,7 +173,6 @@ footer    { visibility: hidden; }
     text-transform: uppercase;
 }
 
-/* Honeypot demo boxes */
 .demo-box-red {
     background: #161b22;
     border: 1px solid rgba(239, 68, 68, 0.3);
@@ -183,10 +191,29 @@ footer    { visibility: hidden; }
 .demo-pill-red { color: #fca5a5; border-color: rgba(248,113,113,0.3); }
 .demo-pill-green { color: #6ee7b7; border-color: rgba(52,211,153,0.3); }
 
-/* Dividers */
+.weight-bar-container {
+    display: flex; align-items: center; gap: 8px;
+    margin: 4px 0;
+}
+.weight-bar-label {
+    font-size: 0.78rem; color: #8b949e;
+    min-width: 140px;
+}
+.weight-bar-track {
+    flex-grow: 1; height: 8px; background: #21262d;
+    border-radius: 4px; overflow: hidden;
+}
+.weight-bar-fill {
+    height: 100%; background: linear-gradient(90deg, #6366f1, #818cf8);
+    border-radius: 4px; transition: width 0.3s ease;
+}
+.weight-bar-value {
+    font-size: 0.78rem; color: #e8eaed; font-weight: 600;
+    min-width: 40px; text-align: right;
+}
+
 hr { border-color: #21262d !important; }
 
-/* File uploader */
 [data-testid="stFileUploader"] {
     border: 1px dashed #21262d !important;
     border-radius: 10px !important;
@@ -201,23 +228,123 @@ hr { border-color: #21262d !important; }
 # ---------------------------------------------------------------------------
 with st.sidebar:
     st.markdown("## 🦅 Aethelgard")
-    st.caption("Hiring Intelligence Engine")
+    st.caption("Hiring Intelligence Engine V5 OMEGA")
     st.divider()
 
     st.markdown("""
-**Version:** 2.0.0 Hybrid  
-**Architecture:** Deterministic + Semantic  
+**Version:** 5.0.0 OMEGA  
+**Architecture:** Hybrid + Cross-Encoder + LLM + SQLite  
 **Target Band:** 5-9 Years Experience
 """)
     st.divider()
 
-    use_semantic = st.toggle("🧠 Semantic Re-Ranking", value=False,
-        help="Adds a sentence-transformers pass on top 500 candidates.")
+    # ── JD Input ──────────────────────────────────────────────────────
+    st.markdown("**Job Description**")
+    jd_text = st.text_area(
+        "Paste the JD to generate dynamic weights",
+        value=(
+            "Senior AI Engineer with expertise in embeddings, vector search, "
+            "retrieval systems, ranking, learning to rank, sentence-transformers. "
+            "5-9 years experience, product company background preferred, "
+            "hands-on coding, Pune or Noida location."
+        ),
+        height=120,
+        help="The engine uses this JD to dynamically calibrate scoring weights via Gemini AI.",
+    )
+
+    if st.button("Generate AI Weights", use_container_width=True):
+        with st.spinner("Calling Gemini 2.5 Flash (structured output)..."):
+            try:
+                from ai_core import generate_dynamic_weights
+                weights, status = generate_dynamic_weights(jd_text)
+                st.session_state["dynamic_weights"] = weights
+                st.session_state["weight_status"] = status
+                st.session_state["manual_override"] = False
+                # Cache to database
+                db.cache_job_profile(jd_text, weights, status)
+            except Exception as e:
+                st.session_state["weight_status"] = f"error: {e}"
+
+    # Display weight status and bars
+    ws = st.session_state.get("weight_status")
+    dw = st.session_state.get("dynamic_weights")
+    if ws and dw:
+        if "ai_generated" in str(ws):
+            st.success(f"Weights: {ws}")
+        else:
+            st.warning(f"Using defaults ({ws})")
+
+        weight_labels = {
+            "title_career": "Title & Career",
+            "skills": "Technical Skills",
+            "experience": "Experience Fit",
+            "behavioral": "Behavioral",
+            "location": "Location",
+            "education": "Education",
+            "career_quality": "Career Quality",
+        }
+        for key, label in weight_labels.items():
+            val = dw.get(key, 0)
+            pct = int(val * 100)
+            bar_width = min(pct * 2.5, 100)
+            st.markdown(
+                f'<div class="weight-bar-container">'
+                f'<span class="weight-bar-label">{label}</span>'
+                f'<div class="weight-bar-track"><div class="weight-bar-fill" style="width:{bar_width}%"></div></div>'
+                f'<span class="weight-bar-value">{pct}%</span>'
+                f'</div>',
+                unsafe_allow_html=True
+            )
+
+    st.divider()
+
+    # ── Interactive Weight Sliders (Upgrade 4) ────────────────────────
+    manual_override = st.toggle("Manual Weight Override", value=st.session_state.get("manual_override", False))
+    st.session_state["manual_override"] = manual_override
+
+    if manual_override:
+        st.caption("Drag sliders to manually set weights (auto-normalized)")
+        slider_keys = {
+            "title_career": "Title & Career",
+            "skills": "Technical Skills",
+            "experience": "Experience Fit",
+            "behavioral": "Behavioral",
+            "location": "Location",
+            "education": "Education",
+            "career_quality": "Career Quality",
+        }
+        raw_sliders = {}
+        for key, label in slider_keys.items():
+            default = int((dw or {}).get(key, 0.14) * 100)
+            raw_sliders[key] = st.slider(label, min_value=2, max_value=40, value=default, key=f"sl_{key}")
+
+        total = sum(raw_sliders.values())
+        if total > 0:
+            manual_weights = {k: round(v / total, 4) for k, v in raw_sliders.items()}
+            # Fix rounding
+            diff = 1.0 - sum(manual_weights.values())
+            max_k = max(manual_weights, key=manual_weights.get)
+            manual_weights[max_k] = round(manual_weights[max_k] + diff, 4)
+            st.session_state["dynamic_weights"] = manual_weights
+            dw = manual_weights
+
+    st.divider()
+
+    # ── Model toggles ─────────────────────────────────────────────────
+    use_semantic = st.toggle("🧠 Bi-Encoder Semantic", value=False,
+        help="Adds a sentence-transformers bi-encoder pass on top 500 candidates.")
+
+    use_cross_encoder = st.toggle("🎯 Cross-Encoder Deep Match", value=False,
+        help="Sliding-window cross-encoder with max-pooling on top 200 candidates.")
 
     show_honeypot_demo = st.toggle("🕵️ Deceptive Profile Demo", value=False,
         help="See how Aethelgard catches keyword-stuffed profiles.")
 
     st.divider()
+
+    # ── Persistent Feedback Stats ─────────────────────────────────────
+    counts = db.get_feedback_counts()
+    st.markdown(f"**Feedback History:** {counts['upvotes']} validated, {counts['downvotes']} rejected")
     st.success("Pipeline Ready")
 
 
@@ -225,8 +352,8 @@ with st.sidebar:
 # Main Header
 # ---------------------------------------------------------------------------
 st.markdown("# 🦅 Aethelgard")
-st.markdown('<span class="pipe-badge">HYBRID DETERMINISTIC + SEMANTIC INTELLIGENCE</span>', unsafe_allow_html=True)
-st.caption("Multi-signal candidate ranking that bypasses resume inflation and keyword stuffing.")
+st.markdown('<span class="pipe-badge">V5 OMEGA | SLIDING-WINDOW CROSS-ENCODER + PERSISTENT RLRF + STRUCTURED LLM</span>', unsafe_allow_html=True)
+st.caption("Enterprise-grade candidate ranking with persistent recruiter feedback, structured AI weights, and deep semantic alignment.")
 
 st.markdown("")
 
@@ -238,7 +365,7 @@ with m2:
 with m3:
     st.markdown('<div class="hero-card"><div class="hero-val">&lt; 5 min</div><div class="hero-lbl">Processing Time</div></div>', unsafe_allow_html=True)
 with m4:
-    st.markdown('<div class="hero-card"><div class="hero-val">7 + 1</div><div class="hero-lbl">Scoring Dimensions</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="hero-card"><div class="hero-val">7 + 2</div><div class="hero-lbl">Scoring Dimensions</div></div>', unsafe_allow_html=True)
 
 st.divider()
 
@@ -296,24 +423,16 @@ if show_honeypot_demo:
     st.markdown("**Signal-by-Signal Comparison**")
     breakdown_data = {
         "Signal": [
-            "Title Alignment (28%)",
-            "Skill Quality (22%)",
-            "Experience Fit (15%)",
-            "Behavioral (15%)",
-            "Location (8%)",
-            "Career Ownership (7%)",
-            "Education (5%)",
+            "Title Alignment (28%)", "Skill Quality (22%)",
+            "Experience Fit (15%)", "Behavioral (15%)",
+            "Location (8%)", "Career Ownership (7%)", "Education (5%)",
         ],
         "Standard ATS": ["—", "0.95", "—", "—", "—", "—", "—"],
         "Aethelgard": ["0.00", "0.42", "0.90", "0.72", "1.00", "0.95", "0.65"],
         "Verdict": [
-            "Marketing != AI Engineer",
-            "No career backing for skills",
-            "8y in range",
-            "Active on platform",
-            "Pune preferred",
-            "Product company",
-            "MBA Marketing",
+            "Marketing != AI Engineer", "No career backing for skills",
+            "8y in range", "Active on platform", "Pune preferred",
+            "Product company", "MBA Marketing",
         ]
     }
     st.dataframe(pd.DataFrame(breakdown_data), hide_index=True, width=0)
@@ -325,6 +444,58 @@ if show_honeypot_demo:
         "Score drops from ~0.95 (ATS) to ~0.09 (Aethelgard)."
     )
     st.divider()
+
+
+# ---------------------------------------------------------------------------
+# NDCG@10 Calculation (Upgrade 4)
+# ---------------------------------------------------------------------------
+def compute_simulated_ndcg(details, weights):
+    """
+    Compute a simulated NDCG@10 measuring how well the top-10 candidates
+    align with the active weight distribution.
+    """
+    if not details or len(details) < 10:
+        return 0.0
+
+    if weights is None:
+        weights = {
+            "title_career": 0.28, "skills": 0.22, "experience": 0.15,
+            "behavioral": 0.15, "location": 0.08, "education": 0.05,
+            "career_quality": 0.07,
+        }
+
+    top_10 = details[:10]
+    dcg = 0.0
+    ideal_scores = []
+
+    for i, cand in enumerate(top_10):
+        comps = cand.get("components", {})
+        relevance = sum(weights.get(k, 0) * comps.get(k, 0) for k in weights)
+        dcg += relevance / math.log2(i + 2)
+        ideal_scores.append(relevance)
+
+    ideal_scores.sort(reverse=True)
+    idcg = sum(s / math.log2(i + 2) for i, s in enumerate(ideal_scores))
+
+    if idcg <= 0:
+        return 0.0
+
+    return min(dcg / idcg, 1.0)
+
+
+def get_memory_usage_mb():
+    """Get current process memory usage in MB."""
+    try:
+        import psutil
+        process = psutil.Process(os.getpid())
+        return process.memory_info().rss / (1024 * 1024)
+    except ImportError:
+        # Fallback for Windows without psutil
+        try:
+            import resource
+            return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+        except ImportError:
+            return 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -347,18 +518,41 @@ if uploaded_file is not None:
         f.write(uploaded_file.getbuffer())
 
     file_size_mb = os.path.getsize(input_path) / (1024 * 1024)
-    mode_text = "Semantic + Deterministic" if use_semantic else "Deterministic"
+
+    modes = ["Deterministic"]
+    if use_semantic:
+        modes.append("Bi-Encoder")
+    if use_cross_encoder:
+        modes.append("Cross-Encoder (Sliding Window)")
+    if st.session_state.get("dynamic_weights"):
+        modes.append("AI Weights" if not manual_override else "Manual Weights")
+    mode_text = " + ".join(modes)
+
     st.info(f"**{uploaded_file.name}** ({file_size_mb:.1f} MB) — Mode: {mode_text}")
 
     if st.button("Execute Ranking Engine", use_container_width=True):
         start_time = time.time()
+        mem_before = get_memory_usage_mb()
 
         try:
-            with st.status("Running Aethelgard pipeline...", expanded=True) as status:
+            with st.status("Running Aethelgard V5 OMEGA pipeline...", expanded=True) as status:
                 st.write("Loading candidate dataset...")
+
                 cmd = ["python", "rank.py", "--candidates", input_path, "--out", output_path]
+
                 if use_semantic:
                     cmd.append("--semantic")
+                if use_cross_encoder:
+                    cmd.append("--cross-encoder")
+
+                dw = st.session_state.get("dynamic_weights")
+                weights_file = None
+                if dw:
+                    weights_file = "temp_weights.json"
+                    with open(weights_file, "w", encoding="utf-8") as wf:
+                        json.dump(dw, wf)
+                    cmd.extend(["--weights-json", weights_file])
+                    st.write("Applying dynamic weights...")
 
                 st.write("Extracting features and computing scores...")
                 st.write("Running honeypot detection...")
@@ -366,25 +560,66 @@ if uploaded_file is not None:
                 result = subprocess.run(cmd, check=True, capture_output=True, text=True)
 
                 if use_semantic:
-                    st.write("Applying semantic re-ranking on top 500...")
+                    st.write("Bi-encoder semantic re-ranking complete.")
+                if use_cross_encoder:
+                    st.write("Cross-encoder sliding-window deep alignment complete.")
 
                 st.write("Generating reasoning for top 100...")
                 st.write("Validating output...")
                 status.update(label="Pipeline complete!", state="complete", expanded=False)
 
             elapsed_time = time.time() - start_time
+            mem_after = get_memory_usage_mb()
+
+            # Log pipeline run to compliance audit
+            db.log_pipeline_run({
+                "file": uploaded_file.name,
+                "file_size_mb": round(file_size_mb, 1),
+                "mode": mode_text,
+                "elapsed_seconds": round(elapsed_time, 1),
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            })
 
             if os.path.exists(output_path):
                 df = pd.read_csv(output_path)
 
-                # Load details JSON
                 details = None
                 if os.path.exists(details_path):
                     with open(details_path, "r", encoding="utf-8") as jf:
                         details = json.load(jf)
 
-                # Summary metrics
+                # ── Upgrade 4: System Profiler Cockpit ────────────────
                 st.markdown("")
+                st.subheader("System Profiler Cockpit")
+
+                candidates_count = 0
+                speed_match = re.search(
+                    r"Phase 1 complete:\s+([\d,]+)\s+candidates",
+                    result.stdout
+                )
+                if speed_match:
+                    candidates_count = int(speed_match.group(1).replace(",", ""))
+
+                speed_cps = candidates_count / elapsed_time if elapsed_time > 0 else 0
+                ndcg_score = compute_simulated_ndcg(details, dw)
+                mem_delta = mem_after - mem_before if mem_before > 0 else 0
+
+                em1, em2, em3, em4, em5 = st.columns(5, gap="small")
+                with em1:
+                    st.metric("Throughput", f"{speed_cps:,.0f}/s")
+                with em2:
+                    st.metric("Memory Model", "O(N) heapq")
+                with em3:
+                    st.metric("NDCG@10", f"{ndcg_score:.4f}")
+                with em4:
+                    st.metric("Execution", f"{elapsed_time:.1f}s")
+                with em5:
+                    mem_display = f"{mem_after:.0f}MB" if mem_after > 0 else "N/A"
+                    st.metric("Memory", mem_display)
+
+                st.markdown("")
+
+                # Summary metrics
                 mc1, mc2, mc3, mc4 = st.columns(4, gap="medium")
                 with mc1:
                     st.metric("Shortlisted", "100")
@@ -395,7 +630,9 @@ if uploaded_file is not None:
                     last_score = df['score'].iloc[-1] if not df.empty else 0
                     st.metric("Cutoff", f"{last_score:.4f}")
                 with mc4:
-                    st.metric("Time", f"{elapsed_time:.1f}s")
+                    fb_counts = db.get_feedback_counts()
+                    total_fb = fb_counts["upvotes"] + fb_counts["downvotes"]
+                    st.metric("Total Feedback", str(total_fb))
 
                 st.markdown("")
 
@@ -406,17 +643,49 @@ if uploaded_file is not None:
 
                 st.divider()
 
-                # Candidate cards
+                # ── Feedback Summary ──────────────────────────────────
+                fb_counts = db.get_feedback_counts()
+                if fb_counts["upvotes"] > 0 or fb_counts["downvotes"] > 0:
+                    st.markdown(
+                        f"**Persistent Recruiter Feedback:** "
+                        f"{fb_counts['upvotes']} validated, "
+                        f"{fb_counts['downvotes']} rejected "
+                        f"(survives reboots)"
+                    )
+
+                # ── Candidate cards with persistent RLRF ──────────────
                 st.subheader("Ranked Shortlist")
 
                 if details:
                     details_map = {d["candidate_id"]: d for d in details}
 
+                    # Load historical feedback from database
+                    historical_feedback = db.get_all_feedback()
+
+                    display_rows = []
                     for _, row in df.iterrows():
                         cid = row['candidate_id']
-                        rank = int(row['rank'])
-                        score = float(row['score'])
-                        reasoning = row.get('reasoning', '')
+                        adjusted_score = float(row['score'])
+
+                        # Apply persistent historical adjustment
+                        if cid in historical_feedback:
+                            adjusted_score = max(0.0, min(1.0, adjusted_score + historical_feedback[cid]))
+
+                        display_rows.append({
+                            "candidate_id": cid,
+                            "original_score": float(row['score']),
+                            "adjusted_score": adjusted_score,
+                            "rank": int(row['rank']),
+                            "reasoning": row.get('reasoning', ''),
+                        })
+
+                    display_rows.sort(key=lambda x: -x["adjusted_score"])
+
+                    for new_rank, item in enumerate(display_rows, 1):
+                        cid = item["candidate_id"]
+                        score = item["adjusted_score"]
+                        original_score = item["original_score"]
+                        reasoning = item["reasoning"]
 
                         detail = details_map.get(cid, {})
                         title = detail.get("current_title", "Unknown")
@@ -425,12 +694,18 @@ if uploaded_file is not None:
                         location = detail.get("location", "Unknown")
                         notice = detail.get("notice_days", 0)
 
-                        # PLAIN text label — no markdown, no HTML, no emojis
-                        label = f"#{rank} | {title} at {company} | Score: {score:.4f}"
+                        # Check persistent feedback state
+                        fb_type = db.get_feedback_type(cid)
+                        adj_indicator = ""
+                        if fb_type == "downvote":
+                            adj_indicator = " [REJECTED]"
+                        elif fb_type == "upvote":
+                            adj_indicator = " [VALIDATED]"
 
-                        with st.expander(label, expanded=(rank <= 3)):
+                        label = f"#{new_rank} | {title} at {company} | Score: {score:.4f}{adj_indicator}"
 
-                            # Info chips
+                        with st.expander(label, expanded=(new_rank <= 3)):
+
                             st.markdown(
                                 f'<div style="margin-bottom:1rem;">'
                                 f'<span class="info-chip">{cid}</span>'
@@ -443,11 +718,9 @@ if uploaded_file is not None:
 
                             st.caption(reasoning)
 
-                            # Two-column layout
                             left_col, right_col = st.columns([1, 1], gap="large")
 
                             with left_col:
-                                # Strengths
                                 strengths = detail.get("strengths", [])
                                 if strengths:
                                     st.markdown("**Why Matched**")
@@ -459,7 +732,6 @@ if uploaded_file is not None:
 
                                 st.markdown("")
 
-                                # Concerns
                                 concerns = detail.get("concerns", [])
                                 if concerns:
                                     st.markdown("**Potential Concerns**")
@@ -494,6 +766,38 @@ if uploaded_file is not None:
                                 if sem > 0:
                                     render_bar("Semantic Match", sem)
 
+                                ce = comps.get("cross_encoder_score", 0)
+                                if ce > 0:
+                                    render_bar("Cross-Encoder", ce)
+
+                            # ── Persistent RLRF Buttons ───────────────
+                            st.markdown("")
+                            fb1, fb2, fb3 = st.columns([1, 1, 3])
+
+                            with fb1:
+                                is_upvoted = fb_type == "upvote"
+                                up_label = "Validated" if is_upvoted else "Valid Match"
+                                if st.button(
+                                    up_label,
+                                    key=f"up_{cid}",
+                                    disabled=is_upvoted,
+                                    use_container_width=True,
+                                ):
+                                    db.record_feedback(cid, "upvote", 0.05)
+                                    st.rerun()
+
+                            with fb2:
+                                is_downvoted = fb_type == "downvote"
+                                dn_label = "Rejected" if is_downvoted else "Not a Match"
+                                if st.button(
+                                    dn_label,
+                                    key=f"down_{cid}",
+                                    disabled=is_downvoted,
+                                    use_container_width=True,
+                                ):
+                                    db.record_feedback(cid, "downvote", -0.15)
+                                    st.rerun()
+
                 else:
                     st.dataframe(df, use_container_width=True, hide_index=True)
 
@@ -524,3 +828,5 @@ if uploaded_file is not None:
         finally:
             if os.path.exists(input_path):
                 os.remove(input_path)
+            if weights_file and os.path.exists(weights_file):
+                os.remove(weights_file)

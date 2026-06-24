@@ -1,38 +1,94 @@
-# Aethelgard: Hybrid Hiring Intelligence Engine 🏆
+# Aethelgard 🏆
+
+![Python](https://img.shields.io/badge/Python-3.9%2B-blue?style=for-the-badge&logo=python)
+![Streamlit](https://img.shields.io/badge/Streamlit-1.30%2B-FF4B4B?style=for-the-badge&logo=streamlit)
+![PyTorch](https://img.shields.io/badge/PyTorch-2.0%2B-EE4C2C?style=for-the-badge&logo=pytorch)
+![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
+![Status](https://img.shields.io/badge/Build-Passing-brightgreen?style=for-the-badge)
+
 **Built for the Hack2Skill Data & AI Challenge**
 
-Recruiters are overwhelmed by resume inflation and keyword-stuffing. Traditional ATS systems get easily tricked by candidates adding buzzwords out of context. 
+## 🚀 Problem Statement
+The collapse of traditional ATS keyword-matching has led to the rise of AI-driven "resume inflation" and honeypot profiles. Recruiters are overwhelmed by candidates who keyword-stuff modern AI/ML terms without the actual trajectory or experience to back it up. 
 
-**Aethelgard** solves this. It is a high-performance, hybrid AI screening system that processes massive datasets (100,000+ records) efficiently to find candidates who *actually* fit the role based on trajectory, behavior, and semantic understanding.
+## 💡 Why This Matters
+Finding the true signal in massive datasets (100,000+ candidates) requires a system that can bypass superficial keywords. Aethelgard enables recruiters to screen at scale without false positives, optimizing for actual engineering capability and alignment.
 
-## 🧠 The Algorithm: How It Works
-Aethelgard does not rely on a single black-box AI score. It uses a **Two-Stage Hybrid Pipeline**:
+## ✨ Features
+- **Honeypot Detection:** Active penalization of profiles with non-technical job titles that keyword-stuff AI/ML buzzwords.
+- **Explainable AI Cards:** Expandable candidate cards displaying exact strengths, concerns, and a visual score breakdown.
+- **RLRF Feedback Loops:** Persistent Reinforcement Learning from Recruiter Feedback.
+- **System Profiler Cockpit:** Live dashboard tracking Candidates/Sec, Memory Usage, and NDCG@10 alignment.
 
-### Stage 1: Deterministic Filtering (Speed & Scale)
-To process 100K+ profiles without memory crashes, the engine uses stream processing (`heapq`) to evaluate candidates across 7 distinct dimensions:
-1. **Title Alignment (28%)**
-2. **Technical Skill Quality (22%)**
-3. **Experience Fit (15%)**
-4. **Behavioral & Platform Activity (15%)**
-5. **Location Preference (8%)**
-6. **Career Ownership/Trajectory (7%)**
-7. **Education Quality (5%)**
+## 🏗 AI & System Architecture
+Aethelgard operates on an optimized **4-Stage Hybrid Pipeline**:
 
-*🔥 Anti-Cheat (Honeypot Detection):* During this stage, the system actively detects and penalizes profiles with non-technical job titles that keyword-stuff AI/ML buzzwords. 
+```mermaid
+flowchart TD
+    A[Raw Candidates JSONL] -->|100K+ Records| B(Stage 1: Deterministic Engine)
+    JD[Job Description] -->|Gemini 2.5 Flash| W(Stage 2: Dynamic Weights)
+    W --> B
+    B -->|Top 200 Shortlist| C{Stage 3: Cross-Encoder}
+    C -->|Sliding Window + Max Pooling| D[Semantic Re-ranking]
+    D --> E(Stage 4: SQLite RLRF)
+    E --> F[Final Ranked Output]
+```
 
-### Stage 2: Semantic Re-Ranking (Deep Understanding)
-The deterministic engine instantly filters the noise down to the Top 500 candidates. Aethelgard then runs an NLP pass using `sentence-transformers` (`all-MiniLM-L6-v2`) to calculate the exact semantic cosine similarity between the Job Description and the candidate's profile, delivering a perfectly ranked Top 100.
+1. **Deterministic Streaming:** An O(N) `heapq` architecture processing 100K+ records safely across 7 core dimensions.
+2. **Dynamic LLM Weights:** Gemini 2.5 Flash dynamically weights the 7 dimensions based on the input Job Description using strict Pydantic schemas.
+3. **Sliding-Window Cross-Encoder:** A deep semantic alignment layer applied to the top 200 candidates. Overcomes the 512-token limit by max-pooling overlapping 350-token windows.
+4. **Persistent SQLite RLRF:** Recruiter feedback (👍/👎) instantly commits to a local SQLite database, permanently adjusting future candidate scores.
 
-## 💻 Tech Stack
-* **Core Engine:** Python, `pandas`, `heapq` (Stream Processing)
-* **AI / Embeddings:** `sentence-transformers`, PyTorch (CPU-optimized)
-* **Frontend UI:** Streamlit with custom Dark Glassmorphism CSS
+## 🔄 Workflow & Folder Structure
 
-## 📊 Recruiter-Centric UI
-Instead of just showing raw data, the UI generates **Rich Candidate Cards**. When a recruiter clicks on a profile, they see:
-* **Why Matched (✔):** Dynamic explanations of their strengths (e.g., "7y experience fits the 5-9y requirement").
-* **Potential Concerns (⚠):** Honest flags (e.g., "90-day notice period").
-* **Visual Score Breakdown:** Clean progress bars showing exactly how the AI evaluated them.
+```text
+📁 aethelgard/
+├── 📄 app.py              # Streamlit SaaS Interface & Cockpit
+├── 📄 rank.py             # Deterministic O(N) Engine + Semantic Pipeline
+├── 📄 ai_core.py          # LLM Weight Configuration via Gemini
+├── 📄 database.py         # SQLite Persistence & RLRF
+├── 📄 requirements.txt    # Dependency Manifest
+├── 📄 test_scoring.py     # Smoke Tests & Validation
+├── 📄 release.sh          # CI/CD Deployment Script
+└── 📁 docs/               # Advanced Architecture & Setup Docs
+```
 
-## 👥 Team
-Built by Sneha Paul and Tejasv Sharma.
+## 🛠 Technology Stack
+- **Core Engine:** Python 3.9+, standard library (`heapq`, `sqlite3`).
+- **UI:** Streamlit, Pandas.
+- **AI/ML:** sentence-transformers (`cross-encoder/ms-marco-MiniLM-L-6-v2`), PyTorch.
+- **Generative AI:** `google-genai` (Gemini 2.5 Flash).
+- **Profiling:** `psutil`.
+
+## 📦 Installation & Configuration
+```bash
+git clone https://github.com/aethelgard/aethelgard.git
+cd aethelgard
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+pip install -r requirements.txt
+export GOOGLE_API_KEY="your-gemini-api-key"
+```
+
+## ▶️ Running Locally & Deployment
+```bash
+streamlit run app.py
+```
+*Note: Aethelgard requires no external databases. SQLite is automatically initialized locally.*
+
+## 📚 API Documentation & Architecture
+Please refer to [docs/API_REFERENCE.md](docs/API_REFERENCE.md) and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## 🔮 Future Scope
+- Integration with external ATS systems (Workday, Greenhouse).
+- Multi-modal JD processing (e.g., matching candidates to recorded hiring manager calls).
+- Distributed processing for datasets > 10M records.
+
+## 👥 Team Members
+- **Aman Kumar** - Core Engineering
+- **Tejasv Sharma** - Core Engineering 
+- **Awi Kumari** - Core Engineering
+- **Lead Architect** - Antigravity AI Agent
+
+## 📜 License & Acknowledgements
+MIT License. Built for the Hack2Skill Data & AI Challenge.

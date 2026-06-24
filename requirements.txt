@@ -1,8 +1,8 @@
-# Aethelgard — Hybrid Deterministic + Semantic Intelligence Pipeline
-# Dependencies for CPU-only, network-free ranking pipeline
+# Aethelgard — Hybrid Intelligence Engine V5 OMEGA
+# Dependencies for CPU-only ranking pipeline with LLM + Cross-Encoder + SQLite
 # Python >= 3.9 required
 
-# Core ranking engine uses stdlib only: json, gzip, csv, argparse, math, re, datetime, heapq, time, logging
+# Core ranking engine uses stdlib only: json, gzip, csv, argparse, math, re, datetime, heapq, time, logging, sqlite3
 
 # Metadata validation
 pyyaml>=6.0
@@ -11,6 +11,12 @@ pyyaml>=6.0
 streamlit
 pandas
 
-# Semantic re-ranking layer (optional — pipeline falls back gracefully if missing)
+# Semantic re-ranking layer (bi-encoder + cross-encoder with sliding window)
 sentence-transformers>=2.2.0
 torch>=2.0.0
+
+# LLM dynamic weight generation (Gemini 2.5 Flash with structured output)
+google-genai>=1.0.0
+
+# System profiling (memory tracking)
+psutil>=5.9.0
