@@ -24,20 +24,37 @@ Finding the true signal in massive datasets (100,000+ candidates) requires a sys
 Aethelgard operates on an optimized **4-Stage Hybrid Pipeline**:
 
 ```mermaid
-flowchart TD
-    A[Raw Candidates JSONL] -->|100K+ Records| B(Stage 1: Deterministic Engine)
-    JD[Job Description] -->|Gemini 2.5 Flash| W(Stage 2: Dynamic Weights)
-    W --> B
-    B -->|Top 200 Shortlist| C{Stage 3: Cross-Encoder}
-    C -->|Sliding Window + Max Pooling| D[Semantic Re-ranking]
-    D --> E(Stage 4: SQLite RLRF)
-    E --> F[Final Ranked Output]
+graph TD
+    %% Styling
+    classDef input fill:#2d2d2d,stroke:#ffffff,stroke-width:2px,color:#ffffff,rx:5px,ry:5px;
+    classDef process fill:#1e1e1e,stroke:#ffffff,stroke-width:2px,color:#ffffff,rx:5px,ry:5px;
+    classDef decision fill:#1e1e1e,stroke:#ffffff,stroke-width:2px,color:#ffffff,shape:diamond;
+    
+    %% Nodes
+    JD[JOB DESCRIPTION]:::input
+    RawJSON[RAW CANDIDATES JSONL]:::input
+    
+    Weights[STAGE 2: DYNAMIC WEIGHTS]:::process
+    Engine[STAGE 1: DETERMINISTIC ENGINE]:::process
+    CrossEncoder{STAGE 3:<br>CROSS-ENCODER}:::decision
+    Semantic[SEMANTIC RE-RANKING]:::process
+    RLRF[STAGE 4: SQLite RLRF]:::process
+    Final[FINAL RANKED OUTPUT]:::process
+
+    %% Connections
+    JD -- Processed via Gemini 2.5 Flash LLM --> Weights
+    Weights --> Engine
+    RawJSON -- Input: 100K+ Records --> Engine
+    Engine -- Output: Top 200 Shortlist --> CrossEncoder
+    CrossEncoder -- SLIDING WINDOW + MAX POOLING --> Semantic
+    Semantic --> RLRF
+    RLRF --> Final
 ```
 
-1. **Deterministic Streaming:** An O(N) `heapq` architecture processing 100K+ records safely across 7 core dimensions.
-2. **Dynamic LLM Weights:** Gemini 2.5 Flash dynamically weights the 7 dimensions based on the input Job Description using strict Pydantic schemas.
-3. **Sliding-Window Cross-Encoder:** A deep semantic alignment layer applied to the top 200 candidates. Overcomes the 512-token limit by max-pooling overlapping 350-token windows.
-4. **Persistent SQLite RLRF:** Recruiter feedback (👍/👎) instantly commits to a local SQLite database, permanently adjusting future candidate scores.
+1. **Stage 2: Dynamic Weights:** Gemini 2.5 Flash processes the Job Description first to generate strict Pydantic schemas. These dynamic weights are then merged into Stage 1.
+2. **Stage 1: Deterministic Engine:** The O(N) `heapq` architecture streams 100K+ records safely, scoring candidates and outputting the "Top 200 Shortlist".
+3. **Stage 3: Cross-Encoder:** The deep semantic alignment layer applied to the Top 200 Shortlist. It relies on "Sliding Window + Max Pooling" before moving to Semantic Re-ranking to overcome the 512-token limit.
+4. **Stage 4: SQLite RLRF:** The final processing gate. Persistent Reinforcement Learning from Recruiter Feedback (👍/👎) commits to a local SQLite database, applying adjustments before outputting the Final Ranked Output.
 
 ## 🔄 Workflow & Folder Structure
 
