@@ -1,3 +1,5 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+
 # Aethelgard — Hybrid Intelligence Engine V5 OMEGA
 # Dependencies for CPU-only ranking pipeline with LLM + Cross-Encoder + SQLite
 # Python >= 3.9 required
@@ -6,6 +8,7 @@
 
 # Metadata validation
 pyyaml>=6.0
+pydantic>=2.0
 
 # Streamlit sandbox UI
 streamlit
