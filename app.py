@@ -435,7 +435,7 @@ if show_honeypot_demo:
             "Product company", "MBA Marketing",
         ]
     }
-    st.dataframe(pd.DataFrame(breakdown_data), hide_index=True, width=0)
+    st.dataframe(pd.DataFrame(breakdown_data), hide_index=True, width='stretch')
 
     st.info(
         "**Key Insight:** A keyword-matching ATS ranks this candidate #3. "
