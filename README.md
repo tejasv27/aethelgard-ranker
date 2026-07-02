@@ -25,10 +25,10 @@ Aethelgard operates on an optimized **4-Stage Hybrid Pipeline**:
 
 ![Aethelgard Architecture Flowchart](docs/assets/architecture_flowchart.png)
 
-1. **Stage 2: Dynamic Weights:** Gemini 2.5 Flash processes the Job Description first to generate strict Pydantic schemas. These dynamic weights are then merged into Stage 1.
-2. **Stage 1: Deterministic Engine:** The O(N) `heapq` architecture streams 100K+ records safely, scoring candidates and outputting the "Top 200 Shortlist".
-3. **Stage 3: Cross-Encoder:** The deep semantic alignment layer applied to the Top 200 Shortlist. It relies on "Sliding Window + Max Pooling" before moving to Semantic Re-ranking to overcome the 512-token limit.
-4. **Stage 4: SQLite RLRF:** The final processing gate. Persistent Reinforcement Learning from Recruiter Feedback (👍/👎) commits to a local SQLite database, applying adjustments before outputting the Final Ranked Output.
+1. **Phase 1: Dynamic Initialization:** Gemini 2.5 Flash processes the Job Description first to generate strict Pydantic schemas. These dynamic weights are then passed to the ranking engine.
+2. **Phase 2: Deterministic Engine:** The O(N) heapq architecture streams 100K+ records safely, scoring candidates and outputting the "Top 200 Shortlist".
+3. **Phase 3: Cross-Encoder Reranking:** The deep semantic alignment layer is applied to the Top 200 Shortlist. It uses "Sliding Window + Max Pooling" to overcome the 512-token limit and evaluate deep contextual fit.
+4. **Phase 4: SQLite RLRF:** The final processing gate. Persistent Reinforcement Learning from Recruiter Feedback (👍/👎) is committed to a local SQLite database, applying adjustments before outputting the Final Ranked Output.
 
 ## 🔄 Workflow & Folder Structure
 
@@ -64,12 +64,7 @@ pip install -r requirements.txt
 
 To run Aethelgard locally, you must provide your own Gemini 2.5 Flash API key via a local environment variable.
 
-1. **Install dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-2. **Configure the AI Environment:**
+1. **Configure the AI Environment:**
    * Create a new file in the root directory named exactly `.env`.
    * Add your Google Gemini API key to the file:
      ```env
@@ -77,7 +72,7 @@ To run Aethelgard locally, you must provide your own Gemini 2.5 Flash API key vi
      ```
    *(Note: The `.env` file is safely ignored by Git to protect your credentials.)*
 
-3. **Launch the Engine:**
+2. **Launch the Engine:**
    ```bash
    streamlit run app.py
    ```
