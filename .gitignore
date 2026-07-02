@@ -9,3 +9,4 @@ submission_details.json
 aethelgard_data.db
 validation_report.txt
 gen_docs.py
+.env

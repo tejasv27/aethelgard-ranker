@@ -7,6 +7,9 @@ import json
 import re
 import math
 
+from dotenv import load_dotenv
+load_dotenv()  # Load .env for local dev (no-op in Docker/HF Spaces)
+
 # ---------------------------------------------------------------------------
 # Page Configuration
 # ---------------------------------------------------------------------------
@@ -253,6 +256,18 @@ with st.sidebar:
     )
 
     if st.button("Generate AI Weights", use_container_width=True):
+        # Validate API key availability before calling Gemini
+        _api_key = (
+            os.environ.get("GEMINI_API_KEY", "")
+            or os.environ.get("GOOGLE_API_KEY", "")
+        ).strip()
+        if not _api_key:
+            st.error(
+                "CRITICAL SYSTEM HALT: GEMINI_API_KEY missing. "
+                "Define it in your local .env file or Hugging Face Secrets."
+            )
+            st.stop()
+
         with st.spinner("Calling Gemini 2.5 Flash (structured output)..."):
             try:
                 from ai_core import generate_dynamic_weights

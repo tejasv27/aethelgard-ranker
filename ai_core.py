@@ -22,6 +22,11 @@ import os
 import re
 from typing import Any
 
+from dotenv import load_dotenv
+
+# Load .env file for local development (no-op in Docker/HF Spaces)
+load_dotenv()
+
 log = logging.getLogger("aethelgard.ai_core")
 
 # ---------------------------------------------------------------------------
@@ -218,10 +223,14 @@ def generate_dynamic_weights(jd_text: str) -> tuple[dict[str, float], str]:
         (weights_dict, status_message) — weights normalized to sum=1.0,
         and a status string.
     """
-    api_key = os.environ.get("GOOGLE_API_KEY", "").strip()
+    # Support both GEMINI_API_KEY (.env / HF Secrets) and legacy GOOGLE_API_KEY
+    api_key = (
+        os.environ.get("GEMINI_API_KEY", "")
+        or os.environ.get("GOOGLE_API_KEY", "")
+    ).strip()
 
     if not api_key:
-        log.info("GOOGLE_API_KEY not set. Using default weights.")
+        log.info("GEMINI_API_KEY not set. Using default weights.")
         return DEFAULT_WEIGHTS.copy(), "fallback: no API key"
 
     if not jd_text or len(jd_text.strip()) < 20:

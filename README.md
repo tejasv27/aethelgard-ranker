@@ -53,19 +53,35 @@ Aethelgard operates on an optimized **4-Stage Hybrid Pipeline**:
 
 ## 📦 Installation & Configuration
 ```bash
-git clone https://github.com/aethelgard/aethelgard.git
-cd aethelgard
+git clone https://github.com/tejasv27/aethelgard-ranker.git
+cd aethelgard-ranker
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
-export GOOGLE_API_KEY="your-gemini-api-key"
 ```
 
-## ▶️ Running Locally & Deployment
-```bash
-streamlit run app.py
-```
-*Note: Aethelgard requires no external databases. SQLite is automatically initialized locally.*
+### ⚙️ Local Development Setup
+
+To run Aethelgard locally, you must provide your own Gemini 2.5 Flash API key via a local environment variable.
+
+1. **Install dependencies:**
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+2. **Configure the AI Environment:**
+   * Create a new file in the root directory named exactly `.env`.
+   * Add your Google Gemini API key to the file:
+     ```env
+     GEMINI_API_KEY="your_actual_api_key_here"
+     ```
+   *(Note: The `.env` file is safely ignored by Git to protect your credentials.)*
+
+3. **Launch the Engine:**
+   ```bash
+   streamlit run app.py
+   ```
+*Aethelgard requires no external databases. SQLite is automatically initialized locally.*
 
 ## 📚 API Documentation & Architecture
 Please refer to [docs/API_REFERENCE.md](docs/API_REFERENCE.md) and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
